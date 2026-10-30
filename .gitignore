@@ -1,4 +1,9 @@
 SoapyPlutoSDR/
 SoapySDR
 libad9361-iio
-libiio
+libiio/
+build/
+rx
+tx
+*.pcm
+gitigonre
