@@ -1,4 +1,7 @@
+#include "burst.hpp"
 #include "config.hpp"
+#include "detector.hpp"
+#include "logger.hpp"
 #include "sdr.hpp"
 #include "signal.hpp"
 
@@ -8,23 +11,24 @@
 #include <vector>
 
 namespace {
-constexpr size_t BURST_LENGTH_BUFFERS = 10;
-constexpr size_t GAP_LENGTH_BUFFERS   = 10;
-constexpr size_t TOTAL_CYCLE_BUFFERS  = BURST_LENGTH_BUFFERS + GAP_LENGTH_BUFFERS;
-constexpr long   TIMEOUT_US           = 400000;
-constexpr size_t ITERATION_COUNT      = 500;
+
+constexpr long   TIMEOUT_US      = 400000;
+constexpr size_t ITERATION_COUNT = 500;
+constexpr size_t FLUSH_BUFFERS   = 16;
 
 void flushRx(SdrDevice &sdr, int16_t *rxBuffer)
 {
-    for (size_t n = 0; n < 16; ) {
+    for (size_t n = 0; n < FLUSH_BUFFERS; ) {
         void *rxBuffs[] = {rxBuffer};
         int flags       = 0;
         long long t     = 0;
-        int sr = SoapySDRDevice_readStream(sdr.get(), sdr.rxStream(), rxBuffs, sdr.rxMtu(), &flags, &t, TIMEOUT_US);
+        int sr = SoapySDRDevice_readStream(sdr.get(), sdr.rxStream(), rxBuffs,
+                                           sdr.rxMtu(), &flags, &t, TIMEOUT_US);
         if (sr < 0) continue;
         n++;
     }
 }
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -43,49 +47,62 @@ int main(int argc, char **argv)
     std::vector<int16_t> rxBuffer(2 * sdr.rxMtu());
 
     SignalGenerator generator;
+    BurstDetector   detector;
+    BufferLogger    logger(config.log_path.c_str());
 
-    const char *currentFile = (config.mode == 0) ? "Txdata.pcm" : "Rxdata.pcm";
-    FILE *dumpFile          = std::fopen(currentFile, "wb");
-    if (!dumpFile) std::perror("fopen");
+    std::FILE *dumpFile = nullptr;
+    if (config.dump_enabled) {
+        dumpFile = std::fopen(config.dump_path.c_str(), "wb");
+        if (!dumpFile) std::perror("fopen");
+    }
 
-    long long lastTime = 0;
-    size_t globalSampleIndex = 0;
+    long long lastTime       = 0;
+    size_t    globalSampleIndex = 0;
+    size_t    bufferIndex    = 0;
 
     flushRx(sdr, rxBuffer.data());
 
     std::printf("Start test...\n");
 
-    for (size_t buffersRead = 0; buffersRead < ITERATION_COUNT; buffersRead++) {
-        void *rxBuffs[] = {rxBuffer.data()};
-        int flags       = 0;
+    for (size_t iteration = 0; iteration < ITERATION_COUNT; ++iteration) {
+        void *rxBuffs[]  = {rxBuffer.data()};
+        int flags        = 0;
         long long timeNs = 0;
 
-        int sr = SoapySDRDevice_readStream(sdr.get(), sdr.rxStream(), rxBuffs, sdr.rxMtu(),
-                                           &flags, &timeNs, TIMEOUT_US);
-        if (sr < 0) continue;
+        int sr = SoapySDRDevice_readStream(sdr.get(), sdr.rxStream(), rxBuffs,
+                                           sdr.rxMtu(), &flags, &timeNs, TIMEOUT_US);
 
-        std::printf("Buffer: %zu - Samples: %i, Flags: %i, Time: %lld, TimeDiff: %lld\n",
-                    buffersRead, sr, flags, timeNs, timeNs - lastTime);
+        bool gotRx = (sr > 0);
+        if (!gotRx) {
+            logger.log(bufferIndex, 0, flags, 0, false);
+            continue;
+        }
+
+        if (config.mode == 1 && detector.detect(rxBuffer.data(), static_cast<size_t>(sr))) {
+            globalSampleIndex = 0;
+        }
+
+        bool isBurstNow = burst::isBurst(bufferIndex);
+        std::printf("Buffer: %zu - Samples: %i, Flags: %i, Time: %lld, TimeDiff: %lld, Burst: %d\n",
+                    bufferIndex, sr, flags, timeNs, timeNs - lastTime, isBurstNow ? 1 : 0);
+        logger.log(bufferIndex, sr, flags, timeNs, isBurstNow);
         lastTime = timeNs;
 
         if (config.mode == 1 && dumpFile)
             std::fwrite(rxBuffer.data(), sizeof(int16_t) * 2, static_cast<size_t>(sr), dumpFile);
 
-        size_t cyclePos = buffersRead % TOTAL_CYCLE_BUFFERS;
-        bool isBurst    = (cyclePos < BURST_LENGTH_BUFFERS);
-
-        if (isBurst) {
+        if (isBurstNow) {
             generator.fillBurst(txBuffer.data(), sdr.txMtu(), globalSampleIndex);
         } else {
-            std::memset(txBuffer.data(), 0, 2 * sdr.txMtu() * sizeof(int16_t));
+            generator.fillSilence(txBuffer.data(), sdr.txMtu());
         }
 
         if (config.mode == 0 && dumpFile)
             std::fwrite(txBuffer.data(), sizeof(int16_t) * 2, sdr.txMtu(), dumpFile);
 
-        long long txTime = timeNs + 4 * 1000 * 1000LL;
+        long long txTime = timeNs + config.tx_time_offset_ns;
 
-        if (buffersRead > 0) {
+        if (bufferIndex > 0) {
             void *txBuffs[] = {txBuffer.data()};
             int txFlags     = SOAPY_SDR_HAS_TIME;
 
@@ -97,6 +114,7 @@ int main(int argc, char **argv)
         }
 
         globalSampleIndex += sdr.txMtu();
+        bufferIndex++;
     }
 
     if (dumpFile) std::fclose(dumpFile);

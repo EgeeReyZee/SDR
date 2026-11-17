@@ -18,6 +18,8 @@ AppConfig makeConfig(int argc, char **argv)
         config.tx_gain = -40.;
         config.rx_gain = 30.;
         config.uri     = "usb:1.4.5";
+        config.dump_path = "Txdata.pcm";
+        config.log_path  = "Tx.log";
     } else {
         config.mode    = 1;
         config.rx_freq = 800e6;
@@ -26,6 +28,10 @@ AppConfig makeConfig(int argc, char **argv)
         config.tx_gain = -40.;
         config.rx_gain = 30.;
         config.uri     = "usb:1.3.5";
+        config.dump_path = "Rxdata.pcm";
+        config.log_path  = "Rx.log";
     }
+    config.tx_time_offset_ns = 4LL * 1000 * 1000;
+    config.dump_enabled      = true;
     return config;
 }
