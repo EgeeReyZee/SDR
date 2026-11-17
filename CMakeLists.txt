@@ -1,20 +1,18 @@
-cmake_minimum_required(VERSION 3.16)
-project(PlutoSDR C)
+cmake_minimum_required(VERSION 3.10)
+project(sdr_test CXX)
 
-set(CMAKE_BUILD_TYPE Debug)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Опция для включения или отключения установки зависимостей
-option(INSTALL_DEPS "Установить зависимости" ON)
-option(PLUTO_TIMESTAMP "Build pluto with timestamp" ON)
-
-# RF frontend driver
 find_package(SoapySDR REQUIRED)
 
-set(MAIN_SOURCE_FILES
-    src/main.c
+add_executable(sdr_test
+    src/main.cpp
+    src/config.cpp
+    src/sdr.cpp
+    src/signal.cpp
+    src/detector.cpp
+    src/logger.cpp
 )
 
-# Добавляем исполняемый файл
-add_executable(main ${MAIN_SOURCE_FILES})
-
-target_link_libraries(main ${SoapySDR_LIBRARIES} m)
+target_link_libraries(sdr_test PRIVATE SoapySDR::SoapySDR)
